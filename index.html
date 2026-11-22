@@ -378,6 +378,17 @@ const MENU = [
     { name: "날짜·시각 고르기", ask: "할 일", when: true,
       build: (text, when) => `할 일 추가: ${text} — ${when}에 알려줘` },
   ]},
+  { name: "반복 할 일", items: [
+    { name: "매일", ask: "언제 무엇을 (예: 밤 11시에 내일 할 일 적기)",
+      build: (text) => `매일 반복하는 할 일 추가: ${text}` },
+    { name: "평일마다", ask: "언제 무엇을 (예: 아침 9시에 메일 확인)",
+      build: (text) => `평일(월~금)마다 반복하는 할 일 추가: ${text}` },
+    { name: "매주", ask: "요일, 시각, 할 일 (예: 월요일 9시에 주간 계획 세우기)",
+      build: (text) => `매주 반복하는 할 일 추가: ${text}` },
+    { name: "매월", ask: "날짜, 시각, 할 일 (예: 25일 10시에 연구비 정산)",
+      build: (text) => `매월 반복하는 할 일 추가: ${text}` },
+    { name: "반복 그만", ask: "할 일 번호나 이름", build: (text) => `할 일 "${text}"의 반복을 그만해줘` },
+  ]},
   { name: "완료 처리", items: [
     { name: "번호로 완료", ask: "할 일 번호 (예: 3)", build: (text) => `할 일 ${text}번 완료 처리해줘` },
     { name: "이름으로 완료", ask: "할 일 이름", build: (text) => `할 일 "${text}" 완료 처리해줘` },
