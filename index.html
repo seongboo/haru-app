@@ -43,7 +43,12 @@
   #status.off::before { background: var(--danger); }
   .ghost { background: none; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 14px; }
 
-  #log { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+  #logwrap { flex: 1; min-height: 0; position: relative; display: flex; }
+  #log { flex: 1; overflow-y: auto; padding: 44px 16px 12px; display: flex; flex-direction: column; gap: 8px; }
+  #clear { position: absolute; top: 8px; left: 12px; z-index: 2; background: var(--panel);
+           border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 13px;
+           color: var(--muted); }
+  #clear[hidden] { display: none; }
   .day { align-self: center; font-size: 12px; color: var(--muted); margin: 8px 0 2px; }
   .msg { max-width: 85%; padding: 8px 12px; border-radius: 14px; border: 1px solid var(--line);
          white-space: pre-wrap; overflow-wrap: anywhere; background: var(--theirs); align-self: flex-start; }
@@ -58,6 +63,8 @@
   #quick::-webkit-scrollbar { display: none; }
   #quick button { white-space: nowrap; background: var(--panel); border: 1px solid var(--line);
                   border-radius: 999px; padding: 6px 14px; font-size: 14px; }
+  #quick button.back { border-color: transparent; background: none; color: var(--muted); padding: 6px 8px; }
+  #quick .where { align-self: center; white-space: nowrap; font-size: 13px; font-weight: 600; padding-right: 2px; }
 
   #composer { display: flex; gap: 8px; padding: 8px 16px 12px; align-items: flex-end; }
   #composer textarea { flex: 1; resize: none; min-height: 44px; max-height: 140px; padding: 10px 12px;
@@ -91,16 +98,12 @@
   <button class="ghost" id="open-settings" type="button">설정</button>
 </header>
 
-<main id="log" aria-live="polite">
-  <div id="empty">아직 기록이 없습니다.<br>아래에서 명령을 보내 보세요.</div>
-</main>
+<div id="logwrap">
+  <button id="clear" type="button" hidden>화면 지우기</button>
+  <main id="log" aria-live="polite"></main>
+</div>
 
-<nav id="quick" aria-label="빠른 명령">
-  <button type="button" data-quick="list">할 일 목록</button>
-  <button type="button" data-quick="todo">할 일 추가</button>
-  <button type="button" data-quick="daily">오늘 계획에 적기</button>
-  <button type="button" data-quick="vault">Obsidian에 저장</button>
-</nav>
+<nav id="quick" aria-label="빠른 명령"></nav>
 
 <form id="composer">
   <textarea id="text" rows="1" placeholder="하루에게 보낼 말" aria-label="하루에게 보낼 말" maxlength="2000"></textarea>
@@ -122,6 +125,7 @@
     <label>ntfy 서버
       <input id="set-server" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://ntfy.sh">
     </label>
+    <button class="ghost" type="button" id="restore">지운 기록 다시 보기</button>
     <div class="row">
       <button class="ghost" type="button" id="settings-cancel">닫기</button>
       <button class="primary" type="submit">저장</button>
@@ -135,7 +139,7 @@
     <label><span id="sheet-label"></span>
       <textarea id="sheet-text" maxlength="1500" required></textarea>
     </label>
-    <label id="sheet-when-wrap">알릴 시각 (선택)
+    <label id="sheet-when-wrap">알릴 날짜·시각
       <input id="sheet-when" type="datetime-local">
     </label>
     <div class="row">
@@ -155,11 +159,14 @@ const DEFAULT_SERVER = "https://ntfy.sh";
 const HISTORY = "12h";           // ntfy.sh가 보관하는 범위 안에서 불러올 과거 기록
 const MAX_SHOWN = 300;
 const KEY = "haru.settings.v1";
+const CLEAR_KEY = "haru.clearedAt.v1";   // 이 시각(초) 이전의 기록은 화면에 보이지 않는다
 
 const $ = (id) => document.getElementById(id);
 const log = $("log"), statusEl = $("status"), textEl = $("text"), sendBtn = $("send");
 
 let settings = loadSettings();
+let clearedAt = 0;
+try { clearedAt = Number(localStorage.getItem(CLEAR_KEY)) || 0; } catch (e) { /* 0으로 진행 */ }
 let source = null;
 const seen = new Set();
 const messages = [];             // {id, time, topic, title, message}
@@ -221,16 +228,20 @@ function connect() {
 function render() {
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
   log.textContent = "";
-  if (!messages.length) {
+  const shown = messages.filter((m) => m.time > clearedAt);
+  $("clear").hidden = !shown.length;
+  if (!shown.length) {
     const empty = document.createElement("div");
     empty.id = "empty";
-    empty.textContent = "최근 12시간 기록이 없습니다. 오늘 받은 알림이 있는데도 비어 있다면 " +
-      "설정의 주제 이름이 ntfy 앱의 것과 한 글자라도 다른 것입니다.";
+    empty.textContent = clearedAt && messages.length
+      ? "화면을 지웠습니다. 새로 주고받는 내용부터 여기에 보입니다."
+      : "최근 12시간 기록이 없습니다. 오늘 받은 알림이 있는데도 비어 있다면 " +
+        "설정의 주제 이름이 ntfy 앱의 것과 한 글자라도 다른 것입니다.";
     log.append(empty);
     return;
   }
   let lastDay = "";
-  for (const m of messages) {
+  for (const m of shown) {
     const when = new Date(m.time * 1000);
     const day = when.toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "short" });
     if (day !== lastDay) {
@@ -294,38 +305,131 @@ function autosize() {
 textEl.addEventListener("input", autosize);
 
 // ---- 빠른 명령 ----------------------------------------------------------
+// 두 단계다: 분류를 누르면 그 줄이 그 분류의 세부 버튼으로 바뀐다.
+// 세부 버튼은 문장을 대신 써 줄 뿐이다 (하루 쪽에는 평범한 명령으로 도착한다).
+//   send:  누르면 바로 보낼 문장
+//   ask:   입력 창의 안내 문구 (있으면 내용을 받아서 build로 문장을 만든다)
+//   when:  true면 날짜·시각 선택기도 보여 준다
 
-const QUICK = {
-  todo:  { title: "할 일 추가", label: "할 일", when: true,
-           build: (text, when) => "할 일 추가: " + text + (when ? ` — ${when}에 알려줘` : "") },
-  daily: { title: "오늘 계획에 적기", label: "적을 내용", when: false,
-           build: (text) => "오늘 계획에 적어줘: " + text },
-  vault: { title: "Obsidian에 저장", label: "노트 내용", when: false,
-           build: (text) => "옵시디언에 저장해줘: " + text },
-};
-let activeQuick = null;
+const todoAt = (phrase) => (text) => `할 일 추가: ${text} — ${phrase}에 알려줘`;
+const daily = (tag) => (text) => `오늘 계획에 적어줘: [${tag}] ${text}`;
+const vaultNote = (kind) => (text) => `옵시디언에 저장해줘 (${kind}): ${text}`;
 
-$("quick").addEventListener("click", (event) => {
-  const kind = event.target.dataset && event.target.dataset.quick;
-  if (!kind) return;
-  if (kind === "list") { send("할 일 목록 보여줘"); return; }
-  activeQuick = QUICK[kind];
-  $("sheet-title").textContent = activeQuick.title;
-  $("sheet-label").textContent = activeQuick.label;
+const MENU = [
+  { name: "할 일 보기", items: [
+    { name: "전체 목록", send: "할 일 목록 보여줘" },
+    { name: "오늘 알림 있는 것", send: "할 일 목록에서 오늘 알림이 잡힌 것만 시각순으로 보여줘" },
+    { name: "알림 없는 것", send: "할 일 목록에서 알림이 없는 것만 보여줘" },
+  ]},
+  { name: "할 일 추가", items: [
+    { name: "알림 없이", ask: "할 일", build: (text) => "할 일 추가: " + text },
+    { name: "30분 뒤", ask: "할 일", build: todoAt("30분 뒤") },
+    { name: "1시간 뒤", ask: "할 일", build: todoAt("1시간 뒤") },
+    { name: "오늘 저녁 6시", ask: "할 일", build: todoAt("오늘 저녁 6시") },
+    { name: "내일 아침 9시", ask: "할 일", build: todoAt("내일 아침 9시") },
+    { name: "날짜·시각 고르기", ask: "할 일", when: true,
+      build: (text, when) => `할 일 추가: ${text} — ${when}에 알려줘` },
+  ]},
+  { name: "완료 처리", items: [
+    { name: "번호로 완료", ask: "할 일 번호 (예: 3)", build: (text) => `할 일 ${text}번 완료 처리해줘` },
+    { name: "이름으로 완료", ask: "할 일 이름", build: (text) => `할 일 "${text}" 완료 처리해줘` },
+  ]},
+  { name: "오늘 계획", items: [
+    { name: "한 일 기록", ask: "한 일", build: daily("한 일") },
+    { name: "할 일 메모", ask: "할 일", build: daily("할 일") },
+    { name: "생각·아이디어", ask: "생각이나 아이디어", build: daily("생각") },
+    { name: "막힌 점", ask: "막힌 점", build: daily("막힌 점") },
+  ]},
+  { name: "Obsidian 저장", items: [
+    { name: "메모", ask: "메모 내용", build: vaultNote("메모") },
+    { name: "아이디어", ask: "아이디어", build: vaultNote("아이디어") },
+    { name: "회의 기록", ask: "회의 내용", build: vaultNote("회의 기록") },
+    { name: "읽을거리", ask: "제목이나 링크, 한 줄 설명", build: vaultNote("읽을거리") },
+  ]},
+  { name: "기억·메모", items: [
+    { name: "이것 기억해 줘", ask: "기억할 내용 (예: 나는 아침형 인간이야)", build: (text) => "기억해줘: " + text },
+    { name: "짧은 메모 남기기", ask: "메모", build: (text) => "메모 추가: " + text },
+  ]},
+];
+
+const quickEl = $("quick");
+let openGroup = null;    // 펼친 분류 (없으면 분류 줄)
+let activeItem = null;   // 입력 창을 띄운 세부 버튼
+
+function chip(label, onClick, cls) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  if (cls) button.className = cls;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function renderQuick() {
+  quickEl.textContent = "";
+  if (!openGroup) {
+    for (const group of MENU) {
+      quickEl.append(chip(group.name, () => { openGroup = group; renderQuick(); }));
+    }
+  } else {
+    quickEl.append(chip("← 뒤로", () => { openGroup = null; renderQuick(); }, "back"));
+    const where = document.createElement("span");
+    where.className = "where";
+    where.textContent = openGroup.name;
+    quickEl.append(where);
+    for (const item of openGroup.items) {
+      quickEl.append(chip(item.ask ? item.name + "…" : item.name, () => pick(item)));
+    }
+  }
+  quickEl.scrollLeft = 0;
+}
+
+async function pick(item) {
+  if (item.send) {
+    if (await send(item.send)) { openGroup = null; renderQuick(); }
+    return;
+  }
+  activeItem = item;
+  $("sheet-title").textContent = `${openGroup.name} — ${item.name}`;
+  $("sheet-label").textContent = item.ask;
   $("sheet-text").value = "";
   $("sheet-when").value = "";
-  $("sheet-when-wrap").style.display = activeQuick.when ? "" : "none";
+  $("sheet-when").required = !!item.when;
+  $("sheet-when-wrap").style.display = item.when ? "" : "none";
   $("sheet").showModal();
-});
+}
 
 $("sheet-cancel").addEventListener("click", () => $("sheet").close());
-$("sheet-form").addEventListener("submit", (event) => {
+$("sheet-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = $("sheet-text").value.trim();
-  if (!text || !activeQuick) return;
+  if (!text || !activeItem) return;
   const when = $("sheet-when").value.replace("T", " ");   // "2026-11-24 09:00"
+  if (activeItem.when && !when) return;
+  const message = activeItem.build(text, when);
   $("sheet").close();
-  send(activeQuick.build(text, when));
+  if (await send(message)) { openGroup = null; renderQuick(); }
+});
+
+renderQuick();
+
+// ---- 화면 지우기 (터미널의 clear처럼) -----------------------------------
+// 보이는 것만 치운다. ntfy 서버의 기록이나 하루의 할 일·메모는 지워지지 않는다.
+
+function setClearedAt(value) {
+  clearedAt = value;
+  try { localStorage.setItem(CLEAR_KEY, String(value)); } catch (e) { /* 이번 실행 동안만 유지 */ }
+  render();
+}
+$("clear").addEventListener("click", () => {
+  // 기준은 마지막 메시지의 시각(ntfy 서버 시계)이다. 기기 시계를 쓰면 서버와
+  // 몇 초 어긋날 때 지운 직후의 새 메시지까지 가려진다.
+  if (messages.length) setClearedAt(messages[messages.length - 1].time);
+});
+$("restore").addEventListener("click", () => {
+  setClearedAt(0);
+  $("settings").close();
+  log.scrollTop = log.scrollHeight;
 });
 
 // ---- 설정 ---------------------------------------------------------------
@@ -371,6 +475,7 @@ document.addEventListener("visibilitychange", () => {
   // 화면으로 돌아왔을 때 연결이 끊겨 있으면 다시 잇는다.
   if (!document.hidden && settings && (!source || source.readyState === 2)) connect();
 });
+render();
 if (settings) connect(); else openSettings();
 </script>
 </body>
