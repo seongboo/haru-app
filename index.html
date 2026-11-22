@@ -382,6 +382,14 @@ const MENU = [
     { name: "번호로 완료", ask: "할 일 번호 (예: 3)", build: (text) => `할 일 ${text}번 완료 처리해줘` },
     { name: "이름으로 완료", ask: "할 일 이름", build: (text) => `할 일 "${text}" 완료 처리해줘` },
   ]},
+  { name: "할 일 고치기", items: [
+    { name: "알림 시각 바꾸기", ask: "어느 할 일을 언제로 (예: 운동을 저녁 7시로)",
+      build: (text) => `할 일 알림 시각 바꿔줘: ${text}` },
+    { name: "알림 없애기", ask: "할 일 번호나 이름", build: (text) => `할 일 "${text}"의 알림을 없애줘` },
+    { name: "내용 바꾸기", ask: "어느 할 일을 무엇으로 (예: 2번을 논문 초안 교수님께 보내기로)",
+      build: (text) => `할 일 내용 바꿔줘: ${text}` },
+    { name: "삭제", ask: "지울 할 일의 번호나 이름", build: (text) => `할 일 "${text}" 삭제해줘` },
+  ]},
   { name: "오늘 계획", items: [
     { name: "한 일 기록", ask: "한 일", build: daily("한 일") },
     { name: "할 일 메모", ask: "할 일", build: daily("할 일") },
