@@ -224,7 +224,8 @@ function render() {
   if (!messages.length) {
     const empty = document.createElement("div");
     empty.id = "empty";
-    empty.textContent = "아직 기록이 없습니다. 아래에서 명령을 보내 보세요.";
+    empty.textContent = "최근 12시간 기록이 없습니다. 오늘 받은 알림이 있는데도 비어 있다면 " +
+      "설정의 주제 이름이 ntfy 앱의 것과 한 글자라도 다른 것입니다.";
     log.append(empty);
     return;
   }
@@ -329,6 +330,12 @@ $("sheet-form").addEventListener("submit", (event) => {
 
 // ---- 설정 ---------------------------------------------------------------
 
+// ntfy 앱에서 복사하면 "ntfy.sh/이름"이나 전체 주소로 붙을 수 있어 이름만 남긴다.
+const TOPIC_RE = /^[-_A-Za-z0-9]{1,64}$/;
+function cleanTopic(value) {
+  return value.trim().replace(/^https?:\/\//i, "").replace(/^[^\/\s]+\//, "").trim();
+}
+
 function openSettings() {
   $("set-notify").value = settings ? settings.notify : "";
   $("set-command").value = settings ? settings.command : "";
@@ -339,10 +346,14 @@ $("open-settings").addEventListener("click", openSettings);
 $("settings-cancel").addEventListener("click", () => $("settings").close());
 $("settings-form").addEventListener("submit", (event) => {
   event.preventDefault();
-  const notify = $("set-notify").value.trim();
-  const command = $("set-command").value.trim();
+  const notify = cleanTopic($("set-notify").value);
+  const command = cleanTopic($("set-command").value);
   const custom = $("set-server").value.trim();
   if (!notify || !command) return;
+  if (!TOPIC_RE.test(notify) || !TOPIC_RE.test(command)) {
+    toast("주제 이름에는 영문, 숫자, -, _ 만 쓸 수 있습니다. 빈칸이나 다른 글자가 섞였는지 확인해 주세요.");
+    return;
+  }
   if (notify === command) { toast("알림 주제와 명령 주제는 서로 달라야 합니다."); return; }
   if (custom && !/^https:\/\//.test(custom)) { toast("서버 주소는 https://로 시작해야 합니다."); return; }
   saveSettings({ notify, command, server: custom });
