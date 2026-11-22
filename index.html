@@ -63,6 +63,12 @@
   #quick::-webkit-scrollbar { display: none; }
   #quick button { white-space: nowrap; background: var(--panel); border: 1px solid var(--line);
                   border-radius: 999px; padding: 6px 14px; font-size: 14px; }
+  #suggest { display: flex; gap: 8px; padding: 8px 16px 0; overflow-x: auto; scrollbar-width: none; }
+  #suggest::-webkit-scrollbar { display: none; }
+  #suggest[hidden] { display: none; }
+  #suggest span { align-self: center; white-space: nowrap; font-size: 12px; color: var(--muted); }
+  #suggest button { white-space: nowrap; background: none; border: 1px solid var(--accent);
+                    color: var(--accent); border-radius: 999px; padding: 6px 14px; font-size: 14px; }
   #quick button.back { border-color: transparent; background: none; color: var(--muted); padding: 6px 8px; }
   #quick .where { align-self: center; white-space: nowrap; font-size: 13px; font-weight: 600; padding-right: 2px; }
 
@@ -103,6 +109,7 @@
   <main id="log" aria-live="polite"></main>
 </div>
 
+<nav id="suggest" aria-label="하루가 제안한 다음 명령" hidden></nav>
 <nav id="quick" aria-label="빠른 명령"></nav>
 
 <form id="composer">
@@ -159,6 +166,7 @@ const DEFAULT_SERVER = "https://ntfy.sh";
 const HISTORY = "12h";           // ntfy.sh가 보관하는 범위 안에서 불러올 과거 기록
 const MAX_SHOWN = 300;
 const KEY = "haru.settings.v1";
+const SUGGEST_SUFFIX = "-suggest";   // 하루가 "다음에 할 만한 명령"을 올리는 주제 (알림 주제 + 이 꼬리)
 const CLEAR_KEY = "haru.clearedAt.v1";   // 이 시각(초) 이전의 기록은 화면에 보이지 않는다
 
 const $ = (id) => document.getElementById(id);
@@ -167,6 +175,7 @@ const log = $("log"), statusEl = $("status"), textEl = $("text"), sendBtn = $("s
 let settings = loadSettings();
 let clearedAt = 0;
 try { clearedAt = Number(localStorage.getItem(CLEAR_KEY)) || 0; } catch (e) { /* 0으로 진행 */ }
+let suggestion = null;           // {time, items}: 가장 최근 답에 딸린 제안
 let source = null;
 const seen = new Set();
 const messages = [];             // {id, time, topic, title, message}
@@ -208,7 +217,8 @@ function toast(text) {
 function connect() {
   if (source) { source.close(); source = null; }
   if (!settings) { setStatus("설정 필요", "off"); return; }
-  const topics = encodeURIComponent(settings.notify) + "," + encodeURIComponent(settings.command);
+  const topics = [settings.notify, settings.command, settings.notify + SUGGEST_SUFFIX]
+    .map(encodeURIComponent).join(",");
   setStatus("연결 중…");
   source = new EventSource(`${server()}/${topics}/sse?since=${HISTORY}`);
   source.onopen = () => setStatus("연결됨", "on");
@@ -218,6 +228,10 @@ function connect() {
     try { data = JSON.parse(event.data); } catch (e) { return; }
     if (data.event !== "message" || !data.id || seen.has(data.id)) return;
     seen.add(data.id);
+    if (data.topic === settings.notify + SUGGEST_SUFFIX) {
+      takeSuggestion(data);
+      return;
+    }
     messages.push(data);
     messages.sort((a, b) => a.time - b.time);
     if (messages.length > MAX_SHOWN) messages.splice(0, messages.length - MAX_SHOWN);
@@ -225,9 +239,43 @@ function connect() {
   };
 }
 
+function takeSuggestion(data) {
+  if (suggestion && suggestion.time > data.time) return;
+  let items = [];
+  try { items = JSON.parse(data.message).items; } catch (e) { return; }
+  if (!Array.isArray(items)) return;
+  items = items.filter((x) => typeof x === "string" && x.trim() && x.length <= 80).slice(0, 3);
+  suggestion = { time: data.time, items };
+  renderSuggestion();
+}
+
+function renderSuggestion() {
+  const el = $("suggest");
+  el.textContent = "";
+  // 제안은 가장 최근 답의 것만 보여 준다: 그 뒤에 내가 새 명령을 보냈으면 낡은 제안이다.
+  const stale = !suggestion || !suggestion.items.length || suggestion.time <= clearedAt ||
+    messages.some((m) => m.topic === settings.command && m.time > suggestion.time);
+  el.hidden = stale;
+  if (stale) return;
+  const label = document.createElement("span");
+  label.textContent = "제안";
+  el.append(label);
+  for (const item of suggestion.items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = item;                       // 글자로만 넣는다
+    button.addEventListener("click", async () => {
+      el.hidden = true;                              // 두 번 누르는 것을 막는다
+      if (!(await send(item))) el.hidden = false;
+    });
+    el.append(button);
+  }
+}
+
 function render() {
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
   log.textContent = "";
+  if (settings) renderSuggestion();
   const shown = messages.filter((m) => m.time > clearedAt);
   $("clear").hidden = !shown.length;
   if (!shown.length) {
