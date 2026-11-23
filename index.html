@@ -94,11 +94,24 @@
                                   background: var(--bg); color: var(--text); width: 100%; }
   dialog textarea { min-height: 80px; resize: vertical; }
   dialog .row { display: flex; gap: 8px; justify-content: flex-end; }
+  #open-menu { padding: 4px 10px; font-size: 18px; line-height: 1.2; }
+  .picks { display: flex; flex-wrap: wrap; gap: 6px; }
+  .picks label { flex-direction: row; align-items: center; gap: 0; position: relative; }
+  .picks input { position: absolute; opacity: 0; width: 1px; height: 1px; padding: 0; }
+  .picks span { border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px;
+                font-size: 14px; color: var(--text); background: var(--bg); }
+  .picks input:checked + span { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+  .picks input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+  dialog fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+  dialog legend { font-size: 13px; color: var(--muted); padding: 0; margin-bottom: 6px; }
+  dialog [hidden] { display: none; }
+  #repeat-preview { color: var(--text); }
 </style>
 </head>
 <body>
 
 <header>
+  <button class="ghost" id="open-menu" type="button" aria-label="반복 예약 열기">☰</button>
   <h1>하루</h1>
   <span id="status">설정 필요</span>
   <button class="ghost" id="open-settings" type="button">설정</button>
@@ -136,6 +149,40 @@
     <div class="row">
       <button class="ghost" type="button" id="settings-cancel">닫기</button>
       <button class="primary" type="submit">저장</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="repeat">
+  <form method="dialog" id="repeat-form">
+    <h2>반복 예약</h2>
+    <label>할 일
+      <input id="rep-task" maxlength="200" placeholder="예: 메일 확인" autocomplete="off" required>
+    </label>
+    <fieldset>
+      <legend>주기</legend>
+      <div class="picks" id="rep-kind">
+        <label><input type="radio" name="rep-kind" value="daily" checked><span>매일</span></label>
+        <label><input type="radio" name="rep-kind" value="weekdays"><span>평일</span></label>
+        <label><input type="radio" name="rep-kind" value="weekly"><span>매주</span></label>
+        <label><input type="radio" name="rep-kind" value="monthly"><span>매월</span></label>
+      </div>
+    </fieldset>
+    <fieldset id="rep-days-wrap" hidden>
+      <legend>요일 (여러 개 선택 가능)</legend>
+      <div class="picks" id="rep-days"></div>
+    </fieldset>
+    <label id="rep-date-wrap" hidden>날짜 (1~31, 없는 날은 그 달 말일)
+      <input id="rep-date" type="number" min="1" max="31" inputmode="numeric" value="1">
+    </label>
+    <label>알릴 시각
+      <input id="rep-time" type="time" value="09:00" required>
+    </label>
+    <p id="repeat-preview"></p>
+    <div class="row">
+      <button class="ghost" type="button" id="repeat-list" style="margin-right:auto">반복 목록 보기</button>
+      <button class="ghost" type="button" id="repeat-cancel">닫기</button>
+      <button class="primary" type="submit">예약</button>
     </div>
   </form>
 </dialog>
@@ -479,6 +526,72 @@ $("sheet-form").addEventListener("submit", async (event) => {
 });
 
 renderQuick();
+
+// ---- 반복 예약 (☰) ------------------------------------------------------
+// 양식으로 고른 것을 문장으로 만들어 하루에게 보낸다. 저장은 하루가 한다.
+
+const DAYS = [["mon", "월"], ["tue", "화"], ["wed", "수"], ["thu", "목"], ["fri", "금"], ["sat", "토"], ["sun", "일"]];
+for (const [code, name] of DAYS) {
+  const label = document.createElement("label");
+  const box = document.createElement("input");
+  box.type = "checkbox"; box.value = code;
+  const span = document.createElement("span");
+  span.textContent = name;
+  label.append(box, span);
+  $("rep-days").append(label);
+}
+
+// 고른 값을 {phrase, rule}로. 아직 덜 골랐으면 null.
+function repeatChoice() {
+  const kind = document.querySelector('input[name="rep-kind"]:checked').value;
+  if (kind === "daily") return { phrase: "매일", rule: "daily" };
+  if (kind === "weekdays") return { phrase: "평일(월~금)마다", rule: "weekdays" };
+  if (kind === "weekly") {
+    const picked = DAYS.filter(([code]) => $("rep-days").querySelector(`input[value="${code}"]`).checked);
+    if (!picked.length) return null;
+    return { phrase: "매주 " + picked.map((d) => d[1]).join("·") + "요일",
+             rule: "weekly:" + picked.map((d) => d[0]).join(",") };
+  }
+  const date = Number($("rep-date").value);
+  if (!Number.isInteger(date) || date < 1 || date > 31) return null;
+  return { phrase: `매월 ${date}일`, rule: "monthly:" + date };
+}
+
+function repeatMessage() {
+  const task = $("rep-task").value.trim().replace(/\s+/g, " ");
+  const time = $("rep-time").value;
+  const choice = repeatChoice();
+  if (!task || !time || !choice) return "";
+  return `반복하는 할 일 추가: ${task} — ${choice.phrase} ${time}에 알려줘 (repeat: ${choice.rule})`;
+}
+
+function refreshRepeat() {
+  const kind = document.querySelector('input[name="rep-kind"]:checked').value;
+  $("rep-days-wrap").hidden = kind !== "weekly";
+  $("rep-date-wrap").hidden = kind !== "monthly";
+  const message = repeatMessage();
+  $("repeat-preview").textContent = message ? "보낼 말: " + message
+    : kind === "weekly" && !repeatChoice() ? "요일을 하나 이상 골라 주세요." : "";
+}
+
+$("repeat-form").addEventListener("input", refreshRepeat);
+$("open-menu").addEventListener("click", () => {
+  if (!settings) { openSettings(); return; }
+  refreshRepeat();
+  $("repeat").showModal();
+});
+$("repeat-cancel").addEventListener("click", () => $("repeat").close());
+$("repeat-list").addEventListener("click", async () => {
+  $("repeat").close();
+  await send("반복하는 할 일만 보여줘");
+});
+$("repeat-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const message = repeatMessage();
+  if (!message) { refreshRepeat(); toast("할 일, 주기, 시각을 모두 골라 주세요."); return; }
+  $("repeat").close();
+  if (await send(message)) $("rep-task").value = "";
+});
 
 // ---- 화면 지우기 (터미널의 clear처럼) -----------------------------------
 // 보이는 것만 치운다. ntfy 서버의 기록이나 하루의 할 일·메모는 지워지지 않는다.
