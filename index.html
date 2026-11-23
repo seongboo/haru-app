@@ -106,6 +106,19 @@
   dialog legend { font-size: 13px; color: var(--muted); padding: 0; margin-bottom: 6px; }
   dialog [hidden] { display: none; }
   #repeat-preview { color: var(--text); }
+  #rep-list-wrap { border-top: 1px solid var(--line); padding: 14px 18px 18px; display: flex;
+                   flex-direction: column; gap: 8px; }
+  #rep-list-wrap p:empty { display: none; }
+  #rep-list-wrap h3 { margin: 0; font-size: 15px; }
+  #rep-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px;
+              max-height: 40vh; overflow-y: auto; }
+  #rep-list li { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line);
+                 border-radius: 10px; padding: 8px 10px; background: var(--bg); }
+  #rep-list .what { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #rep-list .task { overflow-wrap: anywhere; }
+  #rep-list .rule { font-size: 12px; color: var(--muted); }
+  #rep-list button { flex: none; padding: 4px 8px; font-size: 13px; }
+  #rep-list .busy { font-size: 13px; color: var(--muted); flex: none; }
 </style>
 </head>
 <body>
@@ -180,11 +193,16 @@
     </label>
     <p id="repeat-preview"></p>
     <div class="row">
-      <button class="ghost" type="button" id="repeat-list" style="margin-right:auto">반복 목록 보기</button>
       <button class="ghost" type="button" id="repeat-cancel">닫기</button>
       <button class="primary" type="submit">예약</button>
     </div>
   </form>
+  <section id="rep-list-wrap" aria-live="polite">
+    <h3>예약된 반복</h3>
+    <p id="rep-msg" role="status"></p>
+    <p id="rep-list-note"></p>
+    <ul id="rep-list"></ul>
+  </section>
 </dialog>
 
 <dialog id="sheet">
@@ -214,6 +232,8 @@ const HISTORY = "12h";           // ntfy.sh가 보관하는 범위 안에서 불
 const MAX_SHOWN = 300;
 const KEY = "haru.settings.v1";
 const SUGGEST_SUFFIX = "-suggest";   // 하루가 "다음에 할 만한 명령"을 올리는 주제 (알림 주제 + 이 꼬리)
+const STATE_SUFFIX = "-state";       // 하루가 반복 예약 목록을 올리는 주제 (알림 주제 + 이 꼬리)
+const SIGNAL_RE = /^\/(repeats|repeat-off|remove)(\s+\d+)?$/;   // 화면 버튼이 보내는 신호 (말풍선으로 안 보임)
 const CLEAR_KEY = "haru.clearedAt.v1";   // 이 시각(초) 이전의 기록은 화면에 보이지 않는다
 
 const $ = (id) => document.getElementById(id);
@@ -264,7 +284,8 @@ function toast(text) {
 function connect() {
   if (source) { source.close(); source = null; }
   if (!settings) { setStatus("설정 필요", "off"); return; }
-  const topics = [settings.notify, settings.command, settings.notify + SUGGEST_SUFFIX]
+  const topics = [settings.notify, settings.command, settings.notify + SUGGEST_SUFFIX,
+                  settings.notify + STATE_SUFFIX]
     .map(encodeURIComponent).join(",");
   setStatus("연결 중…");
   source = new EventSource(`${server()}/${topics}/sse?since=${HISTORY}`);
@@ -279,6 +300,11 @@ function connect() {
       takeSuggestion(data);
       return;
     }
+    if (data.topic === settings.notify + STATE_SUFFIX) {
+      takeState(data);
+      return;
+    }
+    if (data.topic === settings.command && SIGNAL_RE.test(String(data.message || "").trim())) return;
     messages.push(data);
     messages.sort((a, b) => a.time - b.time);
     if (messages.length > MAX_SHOWN) messages.splice(0, messages.length - MAX_SHOWN);
@@ -574,23 +600,114 @@ function refreshRepeat() {
     : kind === "weekly" && !repeatChoice() ? "요일을 하나 이상 골라 주세요." : "";
 }
 
+// 예약 목록: 하루가 "-state" 주제에 올린 것을 보여 준다. 끄기·삭제는 신호로 보내고
+// 하루가 Claude 없이 처리한다. 목록이 다시 오면 그것이 결과다.
+let repeatState = null;          // {time, rows}: 가장 최근에 받은 목록
+const pending = new Map();       // 할 일 번호 -> 누른 뒤 응답을 기다리는 타이머
+let askedAt = 0, askTimer = 0;
+
+function takeState(data) {
+  if (repeatState && repeatState.time > data.time) return;
+  let rows;
+  try { rows = JSON.parse(data.message).repeats; } catch (e) { return; }
+  if (!Array.isArray(rows)) return;
+  rows = rows.filter((r) => r && Number.isInteger(r.id) && typeof r.task === "string").slice(0, 30);
+  const fresh = !repeatState || data.time > repeatState.time;
+  repeatState = { time: data.time, rows };
+  if (fresh) { for (const timer of pending.values()) clearTimeout(timer); pending.clear(); }
+  clearTimeout(askTimer); askedAt = 0;
+  renderRepeats();
+}
+
+async function signal(text) {
+  if (!settings) return false;
+  try {
+    const response = await fetch(server() + "/", {
+      method: "POST", body: JSON.stringify({ topic: settings.command, message: text }),
+    });
+    return response.ok;
+  } catch (e) { return false; }
+}
+
+// 창이 열려 있으면 토스트가 가려지므로 창 안에도 적는다.
+function repSay(text) {
+  $("rep-msg").textContent = text;
+  if (!$("repeat").open) toast(text);
+}
+
+function act(row, text, label) {
+  repSay("");
+  pending.set(row.id, setTimeout(() => {
+    pending.delete(row.id);
+    renderRepeats();
+    repSay("하루가 응답하지 않습니다. 맥북에서 하루가 켜져 있는지 확인해 주세요.");
+  }, 30000));
+  renderRepeats();
+  signal(text).then((ok) => {
+    if (ok) return;
+    clearTimeout(pending.get(row.id)); pending.delete(row.id);
+    renderRepeats();
+    repSay(label + " 신호를 보내지 못했습니다. 인터넷 연결을 확인해 주세요.");
+  });
+}
+
+function renderRepeats() {
+  const list = $("rep-list"), note = $("rep-list-note");
+  list.textContent = "";
+  if (!repeatState) {
+    note.textContent = askedAt ? "목록을 불러오는 중…" : "하루에게서 목록을 받지 못했습니다. 맥북에서 하루가 켜져 있는지 확인해 주세요.";
+    return;
+  }
+  note.textContent = repeatState.rows.length ? "" : "예약된 반복이 없습니다.";
+  for (const row of repeatState.rows) {
+    const li = document.createElement("li");
+    const what = document.createElement("div"); what.className = "what";
+    const task = document.createElement("span"); task.className = "task"; task.textContent = row.task;
+    const rule = document.createElement("span"); rule.className = "rule";
+    const next = /^\d{4}-(\d\d-\d\d)T(\d\d:\d\d)/.exec(String(row.remind_at || ""));
+    rule.textContent = String(row.repeat || "") + (next ? ` · 다음 ${next[1]} ${next[2]}` : "");
+    what.append(task, rule);
+    li.append(what);
+    if (pending.has(row.id)) {
+      const busy = document.createElement("span"); busy.className = "busy"; busy.textContent = "처리 중…";
+      li.append(busy);
+    } else {
+      const off = document.createElement("button");
+      off.type = "button"; off.className = "ghost"; off.textContent = "반복 끄기";
+      off.addEventListener("click", () => act(row, "/repeat-off " + row.id, "반복 끄기"));
+      const del = document.createElement("button");
+      del.type = "button"; del.className = "ghost"; del.textContent = "삭제";
+      del.addEventListener("click", () => {
+        if (confirm(`"${row.task}" 할 일을 삭제할까요? 되돌릴 수 없습니다.`)) act(row, "/remove " + row.id, "삭제");
+      });
+      li.append(off, del);
+    }
+    list.append(li);
+  }
+}
+
+function askRepeats() {
+  askedAt = Date.now();
+  clearTimeout(askTimer);
+  askTimer = setTimeout(() => { askedAt = 0; if (!repeatState) renderRepeats(); }, 20000);
+  renderRepeats();
+  signal("/repeats");
+}
+
 $("repeat-form").addEventListener("input", refreshRepeat);
 $("open-menu").addEventListener("click", () => {
   if (!settings) { openSettings(); return; }
   refreshRepeat();
+  $("rep-msg").textContent = "";
+  askRepeats();
   $("repeat").showModal();
 });
 $("repeat-cancel").addEventListener("click", () => $("repeat").close());
-$("repeat-list").addEventListener("click", async () => {
-  $("repeat").close();
-  await send("반복하는 할 일만 보여줘");
-});
 $("repeat-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const message = repeatMessage();
-  if (!message) { refreshRepeat(); toast("할 일, 주기, 시각을 모두 골라 주세요."); return; }
-  $("repeat").close();
-  if (await send(message)) $("rep-task").value = "";
+  if (!message) { refreshRepeat(); repSay("할 일, 주기, 시각을 모두 골라 주세요."); return; }
+  if (await send(message)) { $("rep-task").value = ""; refreshRepeat(); repSay("예약을 보냈습니다. 잠시 뒤 아래 목록에 나타납니다."); }
 });
 
 // ---- 화면 지우기 (터미널의 clear처럼) -----------------------------------
@@ -642,7 +759,7 @@ $("settings-form").addEventListener("submit", (event) => {
   if (custom && !/^https:\/\//.test(custom)) { toast("서버 주소는 https://로 시작해야 합니다."); return; }
   saveSettings({ notify, command, server: custom });
   $("settings").close();
-  seen.clear(); messages.length = 0; render();
+  seen.clear(); messages.length = 0; repeatState = null; render();
   connect();
 });
 
