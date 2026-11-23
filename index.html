@@ -104,27 +104,34 @@
   .picks input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
   dialog fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
   dialog legend { font-size: 13px; color: var(--muted); padding: 0; margin-bottom: 6px; }
-  dialog [hidden] { display: none; }
+  dialog [hidden] { display: none !important; }
   #repeat-preview { color: var(--text); }
   #rep-list-wrap { border-top: 1px solid var(--line); padding: 14px 18px 18px; display: flex;
                    flex-direction: column; gap: 8px; }
-  #rep-list-wrap p:empty { display: none; }
+  #rep-list-wrap p:empty, #todo-panel p:empty { display: none; }
+  .tabs { display: flex; gap: 6px; padding: 12px 18px 0; align-items: center; }
+  .tabs [role="tab"] { background: none; border: 0; border-bottom: 2px solid transparent; padding: 6px 8px;
+                       font-size: 16px; color: var(--muted); }
+  .tabs [role="tab"][aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+  .tabs .ghost { margin-left: auto; }
+  #todo-panel { padding: 14px 18px 18px; display: flex; flex-direction: column; gap: 8px; }
+  #todo-panel .rows { max-height: 60vh; }
   #rep-list-wrap h3 { margin: 0; font-size: 15px; }
-  #rep-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px;
+  .rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px;
               max-height: 40vh; overflow-y: auto; }
-  #rep-list li { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line);
+  .rows li { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line);
                  border-radius: 10px; padding: 8px 10px; background: var(--bg); }
-  #rep-list .what { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  #rep-list .task { overflow-wrap: anywhere; }
-  #rep-list .rule { font-size: 12px; color: var(--muted); }
-  #rep-list button { flex: none; padding: 4px 8px; font-size: 13px; }
-  #rep-list .busy { font-size: 13px; color: var(--muted); flex: none; }
+  .rows .what { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .rows .task { overflow-wrap: anywhere; }
+  .rows .rule { font-size: 12px; color: var(--muted); }
+  .rows button { flex: none; padding: 4px 8px; font-size: 13px; }
+  .rows .busy { font-size: 13px; color: var(--muted); flex: none; }
 </style>
 </head>
 <body>
 
 <header>
-  <button class="ghost" id="open-menu" type="button" aria-label="반복 예약 열기">☰</button>
+  <button class="ghost" id="open-menu" type="button" aria-label="할 일 목록과 반복 예약 열기">☰</button>
   <h1>하루</h1>
   <span id="status">설정 필요</span>
   <button class="ghost" id="open-settings" type="button">설정</button>
@@ -167,8 +174,18 @@
 </dialog>
 
 <dialog id="repeat">
+  <div class="tabs" role="tablist">
+    <button type="button" role="tab" id="tab-todos" aria-controls="todo-panel" aria-selected="true">할 일</button>
+    <button type="button" role="tab" id="tab-repeat" aria-controls="repeat-panel" aria-selected="false">반복 예약</button>
+    <button class="ghost" type="button" id="menu-close">닫기</button>
+  </div>
+  <section id="todo-panel" role="tabpanel" aria-labelledby="tab-todos" aria-live="polite">
+    <p id="todo-msg" role="status"></p>
+    <p id="todo-note"></p>
+    <ul id="todo-list" class="rows"></ul>
+  </section>
+  <div id="repeat-panel" role="tabpanel" aria-labelledby="tab-repeat" hidden>
   <form method="dialog" id="repeat-form">
-    <h2>반복 예약</h2>
     <label>할 일
       <input id="rep-task" maxlength="200" placeholder="예: 메일 확인" autocomplete="off" required>
     </label>
@@ -193,7 +210,6 @@
     </label>
     <p id="repeat-preview"></p>
     <div class="row">
-      <button class="ghost" type="button" id="repeat-cancel">닫기</button>
       <button class="primary" type="submit">예약</button>
     </div>
   </form>
@@ -201,8 +217,9 @@
     <h3>예약된 반복</h3>
     <p id="rep-msg" role="status"></p>
     <p id="rep-list-note"></p>
-    <ul id="rep-list"></ul>
+    <ul id="rep-list" class="rows"></ul>
   </section>
+  </div>
 </dialog>
 
 <dialog id="sheet">
@@ -233,7 +250,7 @@ const MAX_SHOWN = 300;
 const KEY = "haru.settings.v1";
 const SUGGEST_SUFFIX = "-suggest";   // 하루가 "다음에 할 만한 명령"을 올리는 주제 (알림 주제 + 이 꼬리)
 const STATE_SUFFIX = "-state";       // 하루가 반복 예약 목록을 올리는 주제 (알림 주제 + 이 꼬리)
-const SIGNAL_RE = /^\/(repeats|repeat-off|remove)(\s+\d+)?$/;   // 화면 버튼이 보내는 신호 (말풍선으로 안 보임)
+const SIGNAL_RE = /^\/(repeats|repeat-off|remove|done)(\s+\d+)?$/;   // 화면 버튼이 보내는 신호 (말풍선으로 안 보임)
 const CLEAR_KEY = "haru.clearedAt.v1";   // 이 시각(초) 이전의 기록은 화면에 보이지 않는다
 
 const $ = (id) => document.getElementById(id);
@@ -609,11 +626,13 @@ let askedAt = 0, askTimer = 0;
 function takeState(data) {
   if (repeatState && repeatState.time > data.time) return;
   let rows;
-  try { rows = JSON.parse(data.message).repeats; } catch (e) { return; }
+  let more = 0;
+  try { const body = JSON.parse(data.message); rows = body.todos; more = Number(body.more) || 0; }
+  catch (e) { return; }
   if (!Array.isArray(rows)) return;
-  rows = rows.filter((r) => r && Number.isInteger(r.id) && typeof r.task === "string").slice(0, 30);
+  rows = rows.filter((r) => r && Number.isInteger(r.id) && typeof r.task === "string").slice(0, 60);
   const fresh = !repeatState || data.time > repeatState.time;
-  repeatState = { time: data.time, rows };
+  repeatState = { time: data.time, rows, more };
   if (fresh) { for (const timer of pending.values()) clearTimeout(timer); pending.clear(); }
   clearTimeout(askTimer); askedAt = 0;
   renderRepeats();
@@ -632,7 +651,8 @@ async function signal(text) {
 // 창이 열려 있으면 토스트가 가려지므로 창 안에도 적는다.
 function repSay(text) {
   $("rep-msg").textContent = text;
-  if (!$("repeat").open) toast(text);
+  $("todo-msg").textContent = text;
+  if (text && !$("repeat").open) toast(text);
 }
 
 function act(row, text, label) {
@@ -651,15 +671,56 @@ function act(row, text, label) {
   });
 }
 
+const NO_STATE = "하루에게서 목록을 받지 못했습니다. 맥북에서 하루가 켜져 있는지 확인해 주세요.";
+const shortTime = (value) => {
+  const m = /^\d{4}-(\d\d-\d\d)T(\d\d:\d\d)/.exec(String(value || ""));
+  return m ? `${m[1]} ${m[2]}` : "";
+};
+
+function rowBase(row, detail) {
+  const li = document.createElement("li");
+  const what = document.createElement("div"); what.className = "what";
+  const task = document.createElement("span"); task.className = "task"; task.textContent = row.task;
+  const rule = document.createElement("span"); rule.className = "rule"; rule.textContent = detail;
+  what.append(task, rule);
+  li.append(what);
+  if (pending.has(row.id)) {
+    const busy = document.createElement("span"); busy.className = "busy"; busy.textContent = "처리 중…";
+    li.append(busy);
+  }
+  return li;
+}
+
+function renderTodos() {
+  const list = $("todo-list"), note = $("todo-note");
+  list.textContent = "";
+  if (!repeatState) { note.textContent = askedAt ? "목록을 불러오는 중…" : NO_STATE; return; }
+  note.textContent = !repeatState.rows.length ? "미완료 할 일이 없습니다."
+    : repeatState.more > 0 ? `알림이 가까운 순으로 ${repeatState.rows.length}건만 보입니다. 외 ${repeatState.more}건` : "";
+  for (const row of repeatState.rows) {
+    const parts = ["#" + row.id];
+    if (shortTime(row.remind_at)) parts.push("⏰ " + shortTime(row.remind_at));
+    if (row.repeat) parts.push("🔁 " + row.repeat);
+    if (row.due) parts.push("마감 " + String(row.due).slice(5, 10));
+    const li = rowBase(row, parts.join(" · "));
+    if (!pending.has(row.id)) {
+      const done = document.createElement("button");
+      done.type = "button"; done.className = "ghost"; done.textContent = "완료";
+      done.addEventListener("click", () => act(row, "/done " + row.id, "완료"));
+      li.append(done);
+    }
+    list.append(li);
+  }
+}
+
 function renderRepeats() {
+  renderTodos();
   const list = $("rep-list"), note = $("rep-list-note");
   list.textContent = "";
-  if (!repeatState) {
-    note.textContent = askedAt ? "목록을 불러오는 중…" : "하루에게서 목록을 받지 못했습니다. 맥북에서 하루가 켜져 있는지 확인해 주세요.";
-    return;
-  }
-  note.textContent = repeatState.rows.length ? "" : "예약된 반복이 없습니다.";
-  for (const row of repeatState.rows) {
+  if (!repeatState) { note.textContent = askedAt ? "목록을 불러오는 중…" : NO_STATE; return; }
+  const repeats = repeatState.rows.filter((r) => r.repeat);
+  note.textContent = repeats.length ? "" : "예약된 반복이 없습니다.";
+  for (const row of repeats) {
     const li = document.createElement("li");
     const what = document.createElement("div"); what.className = "what";
     const task = document.createElement("span"); task.className = "task"; task.textContent = row.task;
@@ -698,11 +759,20 @@ $("repeat-form").addEventListener("input", refreshRepeat);
 $("open-menu").addEventListener("click", () => {
   if (!settings) { openSettings(); return; }
   refreshRepeat();
-  $("rep-msg").textContent = "";
+  repSay("");
+  showTab("todos");
   askRepeats();
   $("repeat").showModal();
 });
-$("repeat-cancel").addEventListener("click", () => $("repeat").close());
+$("menu-close").addEventListener("click", () => $("repeat").close());
+
+function showTab(name) {
+  for (const key of ["todos", "repeat"]) $("tab-" + key).setAttribute("aria-selected", String(key === name));
+  $("todo-panel").hidden = name !== "todos";
+  $("repeat-panel").hidden = name !== "repeat";
+}
+$("tab-todos").addEventListener("click", () => showTab("todos"));
+$("tab-repeat").addEventListener("click", () => showTab("repeat"));
 $("repeat-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const message = repeatMessage();

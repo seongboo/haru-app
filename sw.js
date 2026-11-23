@@ -1,6 +1,6 @@
 // 하루 화면의 서비스 워커: 홈 화면 설치 조건을 채우고, 인터넷이 없을 때도
 // 화면 틀이 열리게 한다. ntfy로 가는 요청(다른 주소)은 건드리지 않는다.
-const CACHE = "haru-shell-v8";
+const CACHE = "haru-shell-v9";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (event) => {
